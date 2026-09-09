@@ -1,91 +1,92 @@
 from __future__ import annotations
 
-import heapq
+import json
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .models import RoadState, RoutePlan
+from .models import RoutePlan
 
 
-class RoutePlanner:
-    """Small deterministic shortest-time route planner.
+class MatrixRoutePlanner:
+    """Decision-layer route planner backed by CARLA-precomputed route costs.
 
-    This is a pure Decision-layer component. It does not call CARLA.
+    It does not call CARLA during scheduling.
     """
 
-    def plan(
+    def __init__(self, matrix_path: str) -> None:
+        self.matrix_path = str(matrix_path)
+        self._routes: Dict[Tuple[str, int, int], RoutePlan] = {}
+        self._load()
+
+    def _load(self) -> None:
+        path = Path(self.matrix_path)
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        for item in data.get("routes", []):
+            if not item.get("reachable", False):
+                continue
+
+            route_type = str(item["route_type"])
+            from_index = int(item["from_spawn_point_index"])
+            to_index = int(item["to_spawn_point_index"])
+
+            plan = RoutePlan(
+                route_id=str(item["route_id"]),
+                route_type=route_type,
+                from_spawn_index=from_index,
+                to_spawn_index=to_index,
+                distance_m=float(item.get("distance_m", 0.0)),
+                estimated_time_s=float(item.get("estimated_time_s", 0.0)),
+            )
+            self._routes[(route_type, from_index, to_index)] = plan
+
+    def plan_empty(
         self,
-        start_point_id: str,
-        end_point_id: str,
-        roads: List[RoadState],
+        from_spawn_index: int,
+        loading_spawn_index: int,
     ) -> Optional[RoutePlan]:
-        if start_point_id == end_point_id:
-            return RoutePlan(point_ids=[start_point_id])
-
-        adjacency: Dict[str, List[Tuple[str, RoadState]]] = {}
-
-        for road in roads:
-            if not road.open:
-                continue
-            if road.distance_m < 0.0 or road.speed_limit_kmh <= 0.0:
-                continue
-
-            adjacency.setdefault(road.start_point_id, []).append(
-                (road.end_point_id, road)
+        return self._routes.get(
+            (
+                "empty_to_loading",
+                int(from_spawn_index),
+                int(loading_spawn_index),
             )
-            if road.bidirectional:
-                adjacency.setdefault(road.end_point_id, []).append(
-                    (road.start_point_id, road)
-                )
+        )
 
-        queue = [(0.0, start_point_id)]
-        best_time = {start_point_id: 0.0}
-        previous = {}
-
-        while queue:
-            current_time, point_id = heapq.heappop(queue)
-
-            if current_time > best_time.get(point_id, float("inf")):
-                continue
-
-            if point_id == end_point_id:
-                break
-
-            edges = sorted(
-                adjacency.get(point_id, []),
-                key=lambda item: (item[1].road_id, item[0]),
+    def plan_haul(
+        self,
+        loading_spawn_index: int,
+        dump_spawn_index: int,
+    ) -> Optional[RoutePlan]:
+        return self._routes.get(
+            (
+                "haul_to_dump",
+                int(loading_spawn_index),
+                int(dump_spawn_index),
             )
+        )
 
-            for next_point, road in edges:
-                speed_mps = road.speed_limit_kmh / 3.6
-                travel_time_s = road.distance_m / speed_mps
-                candidate_time = current_time + travel_time_s
+    def reachable_haul_routes(
+        self,
+        min_distance_m: float = 0.0,
+        max_distance_m: Optional[float] = None,
+    ) -> List[RoutePlan]:
+        result = []
 
-                if candidate_time < best_time.get(next_point, float("inf")):
-                    best_time[next_point] = candidate_time
-                    previous[next_point] = (point_id, road)
-                    heapq.heappush(queue, (candidate_time, next_point))
+        for (route_type, _, _), plan in self._routes.items():
+            if route_type != "haul_to_dump":
+                continue
+            if plan.distance_m < float(min_distance_m):
+                continue
+            if max_distance_m is not None and plan.distance_m > float(max_distance_m):
+                continue
+            result.append(plan)
 
-        if end_point_id not in best_time:
-            return None
-
-        point_ids = [end_point_id]
-        road_ids = []
-        distance_m = 0.0
-        cursor = end_point_id
-
-        while cursor != start_point_id:
-            prev_point, road = previous[cursor]
-            point_ids.append(prev_point)
-            road_ids.append(road.road_id)
-            distance_m += road.distance_m
-            cursor = prev_point
-
-        point_ids.reverse()
-        road_ids.reverse()
-
-        return RoutePlan(
-            point_ids=point_ids,
-            road_ids=road_ids,
-            distance_m=distance_m,
-            estimated_time_s=best_time[end_point_id],
+        return sorted(
+            result,
+            key=lambda item: (
+                item.from_spawn_index,
+                item.to_spawn_index,
+            ),
         )

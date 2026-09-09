@@ -1,94 +1,115 @@
+import json
+
 from open_pit_competition.decision import (
     GreedyScheduler,
-    RoadState,
+    MatrixRoutePlanner,
     TransportTask,
     VehicleState,
     WorldState,
 )
 
 
-def _world():
-    roads = [
-        RoadState(
-            road_id="r_a_load",
-            start_point_id="parking",
-            end_point_id="load_a",
-            distance_m=100.0,
-            speed_limit_kmh=20.0,
-        ),
-        RoadState(
-            road_id="r_load_dump",
-            start_point_id="load_a",
-            end_point_id="dump_a",
-            distance_m=300.0,
-            speed_limit_kmh=20.0,
-        ),
-        RoadState(
-            road_id="r_b_load",
-            start_point_id="parking_b",
-            end_point_id="load_a",
-            distance_m=200.0,
-            speed_limit_kmh=20.0,
-        ),
-    ]
+def _matrix(tmp_path):
+    data = {
+        "routes": [
+            {
+                "route_id": "empty_12_to_18",
+                "route_type": "empty_to_loading",
+                "from_spawn_point_index": 12,
+                "to_spawn_point_index": 18,
+                "reachable": True,
+                "distance_m": 100.0,
+                "estimated_time_s": 20.0,
+            },
+            {
+                "route_id": "empty_78_to_18",
+                "route_type": "empty_to_loading",
+                "from_spawn_point_index": 78,
+                "to_spawn_point_index": 18,
+                "reachable": True,
+                "distance_m": 300.0,
+                "estimated_time_s": 60.0,
+            },
+            {
+                "route_id": "haul_18_to_17",
+                "route_type": "haul_to_dump",
+                "from_spawn_point_index": 18,
+                "to_spawn_point_index": 17,
+                "reachable": True,
+                "distance_m": 400.0,
+                "estimated_time_s": 80.0,
+            },
+        ]
+    }
+    path = tmp_path / "matrix.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return str(path)
 
-    return WorldState(
-        current_time_s=100.0,
+
+def test_scheduler_prefers_lower_total_route_cost(tmp_path):
+    planner = MatrixRoutePlanner(_matrix(tmp_path))
+    world = WorldState(
+        current_time_s=0.0,
         vehicles=[
-            VehicleState(
-                vehicle_id="truck_1",
-                current_point_id="parking",
-            ),
-            VehicleState(
-                vehicle_id="truck_2",
-                current_point_id="parking_b",
-            ),
+            VehicleState("truck_1", current_spawn_index=12),
+            VehicleState("truck_2", current_spawn_index=78),
         ],
         pending_tasks=[
             TransportTask(
-                task_id="task_1",
-                origin_point_id="load_a",
-                destination_point_id="dump_a",
-                release_time_s=0.0,
+                "task_1",
+                origin_spawn_index=18,
+                destination_spawn_index=17,
                 priority=1,
-            ),
-            TransportTask(
-                task_id="task_2",
-                origin_point_id="load_a",
-                destination_point_id="dump_a",
-                release_time_s=0.0,
-                priority=2,
-            ),
+            )
         ],
-        roads=roads,
     )
 
+    assignments = GreedyScheduler(planner).schedule(world)
 
-def test_scheduler_assigns_unique_vehicles_and_tasks():
-    scheduler = GreedyScheduler()
-    assignments = scheduler.schedule(_world())
-
-    assert len(assignments) == 2
-    assert len({item.vehicle_id for item in assignments}) == 2
-    assert len({item.task_id for item in assignments}) == 2
+    assert len(assignments) == 1
+    assert assignments[0].vehicle_id == "truck_1"
 
 
-def test_unavailable_vehicle_is_not_assigned():
-    world = _world()
-    world.vehicles[0].available = False
+def test_unavailable_vehicle_is_excluded(tmp_path):
+    planner = MatrixRoutePlanner(_matrix(tmp_path))
+    world = WorldState(
+        current_time_s=0.0,
+        vehicles=[
+            VehicleState(
+                "truck_1",
+                current_spawn_index=12,
+                available=False,
+            ),
+            VehicleState("truck_2", current_spawn_index=78),
+        ],
+        pending_tasks=[
+            TransportTask(
+                "task_1",
+                origin_spawn_index=18,
+                destination_spawn_index=17,
+                priority=1,
+            )
+        ],
+    )
 
-    assignments = GreedyScheduler().schedule(world)
+    assignments = GreedyScheduler(planner).schedule(world)
 
-    assert all(item.vehicle_id != "truck_1" for item in assignments)
+    assert len(assignments) == 1
+    assert assignments[0].vehicle_id == "truck_2"
 
 
-def test_closed_haul_road_makes_task_infeasible():
-    world = _world()
+def test_unreachable_task_is_not_assigned(tmp_path):
+    planner = MatrixRoutePlanner(_matrix(tmp_path))
+    world = WorldState(
+        current_time_s=0.0,
+        vehicles=[VehicleState("truck_1", current_spawn_index=12)],
+        pending_tasks=[
+            TransportTask(
+                "task_missing",
+                origin_spawn_index=18,
+                destination_spawn_index=999,
+            )
+        ],
+    )
 
-    for road in world.roads:
-        if road.road_id == "r_load_dump":
-            road.open = False
-
-    assignments = GreedyScheduler().schedule(world)
-
-    assert assignments == []
+    assert GreedyScheduler(planner).schedule(world) == []

@@ -1,0 +1,25 @@
+
+================ configs/map_resource_slope_demo_physical_routes.json ================
+{
+  "profile_id": "slope-demo-physical-routes-v1",
+  "map_id": "0325_5",
+  "description": "P6单矿卡真实行驶验证范围。每条路线独立生成一辆vehicle.cat.cat并在结束时销毁。结果只表示该次默认蓝图、目标速度与地图版本下的单车尝试，不代表多车安全。",
+  "routes": [
+    {"route_id": "vehicle01_original_patrol", "from_spawn_point_index": 78, "to_spawn_point_index": 48, "purpose": "矿区巡检矿卡01原任务"},
+    {"route_id": "vehicle02_original_patrol", "from_spawn_point_index": 28, "to_spawn_point_index": 63, "purpose": "边坡复核矿卡02原任务"},
+    {"route_id": "vehicle03_original_patrol", "from_spawn_point_index": 63, "to_spawn_point_index": 70, "purpose": "综合巡检矿卡03原任务"},
+    {"route_id": "vehicle02_takeover_vehicle01_task", "from_spawn_point_index": 28, "to_spawn_point_index": 48, "purpose": "矿卡02接管矿卡01原任务"},
+    {"route_id": "vehicle03_takeover_vehicle01_task", "from_spawn_point_index": 63, "to_spawn_point_index": 48, "purpose": "矿卡03接管矿卡01原任务"}
+  ]
+}
+
+================ configs/map_resource_vehicle02_replacement_physical_routes.json ================
+{
+  "profile_id": "vehicle02-replacement-physical-routes-v1",
+  "map_id": "0325_5",
+  "description": "P6.1矿卡02替代任务候选的单矿卡物理行驶验证。候选47、10来自起点28定向P5扫描，均为PLANNER_NEAR_ENDPOINT；仅用于物理验证，尚未写入正式场景任务。",
+  "routes": [
+    {"route_id": "vehicle02_candidate_task_spawn47", "from_spawn_point_index": 28, "to_spawn_point_index": 47, "purpose": "矿卡02替代任务候选A：P5定向扫描候选"},
+    {"route_id": "vehicle02_candidate_task_spawn10", "from_spawn_point_index": 28, "to_spawn_point_index": 10, "purpose": "矿卡02替代任务候选B：P5定向扫描候选"}
+  ]
+}
