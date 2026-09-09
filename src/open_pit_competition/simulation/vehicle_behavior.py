@@ -48,6 +48,15 @@ class DrivingRuleConfig:
     forward_cone_cosine: float = 0.20
     lateral_tolerance_m: float = 6.0
 
+    # On a curved haul road, a valid front truck can appear more than
+    # 6 m away from the ego vehicle's instantaneous heading line even
+    # though both vehicles are following the same physical road.
+    #
+    # The detector therefore expands the lateral corridor according
+    # to the heading difference between ego and candidate, but caps
+    # that expansion to avoid accepting arbitrary nearby vehicles.
+    max_curve_lateral_tolerance_m: float = 15.0
+
     standstill_gap_m: float = 8.0
     time_headway_s: float = 2.0
     comfortable_decel_mps2: float = 1.8
@@ -445,19 +454,60 @@ class VehicleBehavior:
 
             if longitudinal <= 0.0:
                 continue
+
             if forward_cosine < self.config.forward_cone_cosine:
-                continue
-            if lateral > self.config.lateral_tolerance_m:
                 continue
 
             candidate_yaw_rad = math.radians(candidate.yaw_deg)
             candidate_forward_x = math.cos(candidate_yaw_rad)
             candidate_forward_y = math.sin(candidate_yaw_rad)
+
             heading_alignment = (
                 ego_forward_x * candidate_forward_x
                 + ego_forward_y * candidate_forward_y
             )
+
             if heading_alignment < self.config.heading_alignment_cosine:
+                continue
+
+            # ----------------------------------------------------
+            # Curve-aware lateral corridor
+            # ----------------------------------------------------
+            #
+            # A fixed 6 m corridor works on straight road sections,
+            # but fails on mine-road curves.  For two vehicles
+            # following a smooth curve, the chord between them lies
+            # between their two heading directions.  The expected
+            # lateral displacement from ego's tangent grows roughly
+            # with:
+            #
+            #     distance * sin(delta_heading / 2)
+            #
+            # Using the identity
+            # sin(delta/2) = sqrt((1 - cos(delta)) / 2),
+            # we can compute the allowance directly from the heading
+            # alignment cosine.
+            #
+            # Important safety property:
+            # if both vehicles have the same heading (parallel lanes),
+            # curve_extra becomes zero, so the normal 6 m corridor
+            # still applies.
+            curve_extra_m = (
+                horizontal_distance
+                * math.sqrt(
+                    max(
+                        0.0,
+                        (1.0 - heading_alignment) * 0.5,
+                    )
+                )
+            )
+
+            effective_lateral_tolerance_m = min(
+                self.config.max_curve_lateral_tolerance_m,
+                self.config.lateral_tolerance_m + curve_extra_m,
+            )
+
+            if lateral > effective_lateral_tolerance_m:
                 continue
 
             half_ego_length = max(0.0, ego.length_m * 0.5)
