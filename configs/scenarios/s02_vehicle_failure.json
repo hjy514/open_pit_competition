@@ -1,0 +1,25 @@
+{
+  "scenario_id": "S02",
+  "name": "vehicle_failure",
+  "description": "车辆故障场景：6辆CAT矿卡正常运行，truck_3在40秒时发生故障并停车，20秒后恢复运行。",
+  "duration_s": 110.0,
+  "initial_spawn_count": 2,
+  "spawn_clearance_m": 25.0,
+  "destination_spawn_index": 48,
+  "events": [
+    {
+      "type": "vehicle_failure",
+      "at_seconds": 40.0,
+      "params": {
+        "vehicle_id": "truck_3"
+      }
+    },
+    {
+      "type": "vehicle_recovery",
+      "at_seconds": 60.0,
+      "params": {
+        "vehicle_id": "truck_3"
+      }
+    }
+  ]
+}
