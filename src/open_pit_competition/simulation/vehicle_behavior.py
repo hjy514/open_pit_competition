@@ -167,6 +167,7 @@ class VehicleBehavior:
             ego=ego,
             context=context,
             cruise_speed_kmh=cruise_speed_kmh,
+            previous_state=previous_state,
         )
         if obstacle_decision is not None:
             return self._remember(ego, obstacle_decision)
@@ -554,6 +555,7 @@ class VehicleBehavior:
         ego: VehicleSnapshot,
         context: BehaviorContext,
         cruise_speed_kmh: float,
+        previous_state: DrivingState,
     ) -> Optional[DrivingDecision]:
         valid_obstacles = [
             obstacle
@@ -593,6 +595,30 @@ class VehicleBehavior:
             ego_speed_mps=ego.speed_mps,
             front_speed_mps=obstacle_speed_mps,
         )
+
+        # --------------------------------------------------------
+        # Latch OBSTACLE_STOP while the stopped obstacle remains.
+        #
+        # Without this latch, ego speed falls after the first stop
+        # decision, dynamic safe_gap shrinks, and the state can fall
+        # back to DECELERATE even though the obstacle is still there.
+        # That also prevents the later OBSTACLE_STOP -> RESUME
+        # transition when the obstacle is removed.
+        # --------------------------------------------------------
+        if (
+            previous_state == DrivingState.OBSTACLE_STOP
+            and obstacle_speed_mps <= self.config.stopped_speed_mps
+        ):
+            return DrivingDecision(
+                state=DrivingState.OBSTACLE_STOP,
+                target_speed_kmh=0.0,
+                reason="holding for stopped obstacle",
+                brake_override=self.config.wait_brake,
+                safe_gap_m=safe_gap_m,
+                ttc_s=ttc_s,
+                obstacle_id=obstacle.obstacle_id,
+                obstacle_distance_m=distance_m,
+            )
 
         if (
             obstacle_speed_mps <= self.config.stopped_speed_mps
