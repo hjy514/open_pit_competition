@@ -1,0 +1,10 @@
+{
+  "scenario_id": "S01",
+  "name": "normal_production_baseline",
+  "description": "正常生产基线：6辆CAT矿卡依次进入同一运输路线，不注入车辆故障和道路封闭事件。",
+  "duration_s": 90.0,
+  "initial_spawn_count": 2,
+  "spawn_clearance_m": 25.0,
+  "destination_spawn_index": 48,
+  "events": []
+}

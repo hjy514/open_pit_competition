@@ -1,0 +1,36 @@
+{
+  "fleet_id": "cat_mine_truck_fleet_6",
+  "blueprint_id": "vehicle.cat.cat",
+  "vehicles": [
+    {
+      "vehicle_id": "truck_1",
+      "spawn_point_index": 12,
+      "cruise_speed_kmh": 12.0
+    },
+    {
+      "vehicle_id": "truck_2",
+      "spawn_point_index": 78,
+      "cruise_speed_kmh": 14.0
+    },
+    {
+      "vehicle_id": "truck_3",
+      "spawn_point_index": 78,
+      "cruise_speed_kmh": 14.0
+    },
+    {
+      "vehicle_id": "truck_4",
+      "spawn_point_index": 78,
+      "cruise_speed_kmh": 14.0
+    },
+    {
+      "vehicle_id": "truck_5",
+      "spawn_point_index": 78,
+      "cruise_speed_kmh": 14.0
+    },
+    {
+      "vehicle_id": "truck_6",
+      "spawn_point_index": 78,
+      "cruise_speed_kmh": 14.0
+    }
+  ]
+}

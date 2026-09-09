@@ -1,0 +1,7 @@
+{
+  "carla_root": "/home/xiaoa/carla",
+  "host": "127.0.0.1",
+  "port": 2000,
+  "timeout_seconds": 20.0,
+  "control_period_s": 0.05
+}
