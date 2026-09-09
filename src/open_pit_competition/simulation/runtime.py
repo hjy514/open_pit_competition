@@ -91,6 +91,11 @@ class SimulationRuntime:
             system_config.get("spawn_retry_interval_s", 1.0)
         )
 
+        # Simulation-layer state for the currently assigned haul route.
+        # S07 toggles this state. VehicleBehavior only consumes road_open;
+        # it does not own scenario/event logic.
+        self.route_open = True
+
     def _vehicle_id(self, spec: Dict[str, Any]) -> str:
         return str(spec["vehicle_id"])
 
@@ -129,7 +134,7 @@ class SimulationRuntime:
 
         self.contexts[vehicle_id] = BehaviorContext(
             cruise_speed_kmh=speed_kmh,
-            road_open=True,
+            road_open=self.route_open,
         )
 
         self.spawned_ids.append(vehicle_id)
@@ -253,6 +258,26 @@ class SimulationRuntime:
             )
             return
 
+        if event.event_type == "road_closure":
+            self.route_open = False
+            for context in self.contexts.values():
+                context.road_open = False
+            print(
+                "[EVENT] road closure applied | route_open=False | "
+                "affected={}".format(len(self.contexts))
+            )
+            return
+
+        if event.event_type == "road_reopen":
+            self.route_open = True
+            for context in self.contexts.values():
+                context.road_open = True
+            print(
+                "[EVENT] road reopen applied | route_open=True | "
+                "affected={}".format(len(self.contexts))
+            )
+            return
+
         raise ValueError(
             "unsupported runtime event type: {}".format(
                 event.event_type
@@ -318,10 +343,12 @@ class SimulationRuntime:
                 if elapsed - last_status_time >= 5.0:
                     last_status_time = elapsed
                     print(
-                        "[RUNTIME] {:6.1f}s | active={}/{} | spawned={}".format(
+                        "[RUNTIME] {:6.1f}s | active={}/{} | route_open={} | "
+                        "spawned={}".format(
                             elapsed,
                             len(self.spawned_ids),
                             len(self.vehicles),
+                            self.route_open,
                             ",".join(self.spawned_ids),
                         )
                     )
@@ -420,4 +447,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

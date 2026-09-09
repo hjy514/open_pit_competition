@@ -1,0 +1,25 @@
+{
+  "scenario_id": "S07",
+  "name": "road_closure",
+  "description": "道路封闭场景：6辆CAT矿卡正常运行，70秒时当前运输路线封闭，所有受控矿卡进入道路等待；90秒时道路重新开放并恢复运行。",
+  "duration_s": 120.0,
+  "initial_spawn_count": 2,
+  "spawn_clearance_m": 25.0,
+  "destination_spawn_index": 48,
+  "events": [
+    {
+      "type": "road_closure",
+      "at_seconds": 70.0,
+      "params": {
+        "scope": "current_haul_route"
+      }
+    },
+    {
+      "type": "road_reopen",
+      "at_seconds": 90.0,
+      "params": {
+        "scope": "current_haul_route"
+      }
+    }
+  ]
+}
