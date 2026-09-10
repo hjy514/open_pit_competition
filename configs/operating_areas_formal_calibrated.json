@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "map_id": "0325_5",
+  "profile_id": "formal-s01-s02-s07-cat-calibrated-v1",
+  "description": "S01/S02/S07正式Closed Loop专用CAT路线标定。只使用正式fleet已实际长期运行过的起点12/78和目的点48，避免把GRP图上可达但未验证的大型CAT路线加入Decision候选池。",
+  "areas": [
+    {
+      "area_id": "formal_loading",
+      "area_type": "haul_loading",
+      "point_spawn_indices": [
+        12,
+        78
+      ]
+    },
+    {
+      "area_id": "formal_dump",
+      "area_type": "haul_dump",
+      "point_spawn_indices": [
+        48
+      ]
+    }
+  ]
+}

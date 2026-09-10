@@ -1,0 +1,18 @@
+{
+  "schema_version": "closed-loop-v1",
+  "decision_interval_s": 5.0,
+  "observation_interval_s": 0.5,
+  "arrival_radius_m": 12.0,
+  "service_stop_speed_mps": 0.5,
+  "loading_duration_s": 4.0,
+  "unloading_duration_s": 3.0,
+  "task_count": 8,
+  "task_seed": 20260910,
+  "task_release_interval_s": 0.0,
+  "min_haul_distance_m": 0.0,
+  "max_haul_distance_m": 450.0,
+  "route_matrix_path": "configs/decision_route_matrix.json",
+  "operating_areas_path": "configs/operating_areas.json",
+  "database_path": "runtime_data/database/open_pit.db",
+  "results_path": "runtime_data/results/closed_loop_v1_summary.json"
+}

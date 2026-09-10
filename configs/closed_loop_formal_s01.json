@@ -1,0 +1,78 @@
+{
+  "schema_version": "closed-loop-formal-cat-calibrated-v1",
+  "decision_interval_s": 5.0,
+  "observation_interval_s": 0.5,
+  "arrival_radius_m": 12.0,
+  "service_stop_speed_mps": 0.5,
+  "loading_duration_s": 4.0,
+  "unloading_duration_s": 3.0,
+  "task_count": 6,
+  "task_seed": 20260910,
+  "task_release_interval_s": 0.0,
+  "task_templates": [
+    {
+      "task_id": "formal_task_001",
+      "origin_spawn_index": 12,
+      "destination_spawn_index": 48,
+      "release_time_s": 0.0,
+      "priority": 3
+    },
+    {
+      "task_id": "formal_task_002",
+      "origin_spawn_index": 78,
+      "destination_spawn_index": 48,
+      "release_time_s": 0.0,
+      "priority": 2
+    },
+    {
+      "task_id": "formal_task_003",
+      "origin_spawn_index": 78,
+      "destination_spawn_index": 48,
+      "release_time_s": 0.0,
+      "priority": 2
+    },
+    {
+      "task_id": "formal_task_004",
+      "origin_spawn_index": 78,
+      "destination_spawn_index": 48,
+      "release_time_s": 0.0,
+      "priority": 2
+    },
+    {
+      "task_id": "formal_task_005",
+      "origin_spawn_index": 78,
+      "destination_spawn_index": 48,
+      "release_time_s": 0.0,
+      "priority": 2
+    },
+    {
+      "task_id": "formal_task_006",
+      "origin_spawn_index": 78,
+      "destination_spawn_index": 48,
+      "release_time_s": 0.0,
+      "priority": 2
+    }
+  ],
+  "prefer_initial_loading_origins": true,
+  "min_haul_distance_m": 0.0,
+  "max_haul_distance_m": null,
+  "route_matrix_path": "configs/decision_route_matrix_formal_calibrated.json",
+  "operating_areas_path": "configs/operating_areas_formal_calibrated.json",
+  "database_path": "runtime_data/database/open_pit.db",
+  "route_distance_tolerance_ratio": 0.08,
+  "route_start_tolerance_m": 30.0,
+  "route_skip_ahead_waypoints": 2,
+  "route_complete_acceptance_radius_m": 35.0,
+  "route_endpoint_arrival_radius_m": 12.0,
+  "route_endpoint_remaining_waypoints_max": 8,
+  "stall_recovery_enabled": true,
+  "stall_speed_threshold_kmh": 0.8,
+  "stall_timeout_s": 6.0,
+  "stall_recovery_cooldown_s": 6.0,
+  "stall_max_recoveries_per_leg": 8,
+  "stall_recovery_forward_m": 18.0,
+  "stall_recovery_z_offset_m": 0.5,
+  "stall_recovery_clearance_m": 12.0,
+  "stall_recovery_max_extra_forward_m": 30.0,
+  "results_path": "runtime_data/results/s01_closed_loop_formal_summary.json"
+}

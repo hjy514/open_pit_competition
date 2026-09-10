@@ -1,0 +1,36 @@
+{
+  "fleet_id": "closed_loop_demo_cat_fleet_6",
+  "blueprint_id": "vehicle.cat.cat",
+  "vehicles": [
+    {
+      "vehicle_id": "truck_1",
+      "spawn_point_index": 53,
+      "cruise_speed_kmh": 12.0
+    },
+    {
+      "vehicle_id": "truck_2",
+      "spawn_point_index": 52,
+      "cruise_speed_kmh": 14.0
+    },
+    {
+      "vehicle_id": "truck_3",
+      "spawn_point_index": 55,
+      "cruise_speed_kmh": 14.0
+    },
+    {
+      "vehicle_id": "truck_4",
+      "spawn_point_index": 46,
+      "cruise_speed_kmh": 14.0
+    },
+    {
+      "vehicle_id": "truck_5",
+      "spawn_point_index": 22,
+      "cruise_speed_kmh": 14.0
+    },
+    {
+      "vehicle_id": "truck_6",
+      "spawn_point_index": 18,
+      "cruise_speed_kmh": 14.0
+    }
+  ]
+}

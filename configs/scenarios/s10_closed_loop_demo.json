@@ -1,0 +1,10 @@
+{
+  "scenario_id": "S10",
+  "name": "closed_loop_six_truck_short_route_demo",
+  "description": "Closed Loop V1.1六车短路线物理闭环验证：6辆CAT分别从真实装载候选点起步，执行Decision选定的短运输任务，用于快速验证六车调度、装载、运输、卸载和完成反馈。",
+  "duration_s": 180.0,
+  "initial_spawn_count": 6,
+  "spawn_clearance_m": 25.0,
+  "destination_spawn_index": 48,
+  "events": []
+}

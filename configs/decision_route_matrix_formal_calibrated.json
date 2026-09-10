@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.0-decision-route-matrix-formal-cat-calibrated",
+  "map_id": "0325_5",
+  "sampling_resolution_m": 2.0,
+  "reference_speed_kmh": 14.0,
+  "initial_spawn_indices": [
+    12,
+    78
+  ],
+  "loading_spawn_indices": [
+    12,
+    78
+  ],
+  "dump_spawn_indices": [
+    48
+  ],
+  "routes": [
+    {
+      "route_id": "haul_to_dump_12_to_48",
+      "route_type": "haul_to_dump",
+      "from_spawn_point_index": 12,
+      "to_spawn_point_index": 48,
+      "reachable": true,
+      "distance_m": 387.229,
+      "estimated_time_s": 99.573,
+      "waypoint_count": 201,
+      "road_lane_sequence": [
+        {
+          "road_id": 4,
+          "lane_id": -1
+        },
+        {
+          "road_id": 69,
+          "lane_id": -1
+        },
+        {
+          "road_id": 117,
+          "lane_id": -1
+        },
+        {
+          "road_id": 38,
+          "lane_id": -1
+        },
+        {
+          "road_id": 33,
+          "lane_id": -1
+        },
+        {
+          "road_id": 79,
+          "lane_id": -1
+        },
+        {
+          "road_id": 13,
+          "lane_id": -1
+        }
+      ],
+      "cat_validation_status": "formal_baseline_route_pool"
+    },
+    {
+      "route_id": "haul_to_dump_78_to_48",
+      "route_type": "haul_to_dump",
+      "from_spawn_point_index": 78,
+      "to_spawn_point_index": 48,
+      "reachable": true,
+      "distance_m": 466.526,
+      "estimated_time_s": 119.964,
+      "waypoint_count": 243,
+      "road_lane_sequence": [
+        {
+          "road_id": 12,
+          "lane_id": 2
+        },
+        {
+          "road_id": 99,
+          "lane_id": 1
+        },
+        {
+          "road_id": 4,
+          "lane_id": -1
+        },
+        {
+          "road_id": 69,
+          "lane_id": -1
+        },
+        {
+          "road_id": 117,
+          "lane_id": -1
+        },
+        {
+          "road_id": 38,
+          "lane_id": -1
+        },
+        {
+          "road_id": 33,
+          "lane_id": -1
+        },
+        {
+          "road_id": 79,
+          "lane_id": -1
+        },
+        {
+          "road_id": 13,
+          "lane_id": -1
+        }
+      ],
+      "cat_validation_status": "formal_baseline_route_pool"
+    }
+  ],
+  "summary": {
+    "empty_route_pairs": 0,
+    "haul_route_pairs": 2,
+    "total_pairs": 2,
+    "reachable_pairs": 2,
+    "unreachable_pairs": 0
+  }
+}

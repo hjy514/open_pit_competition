@@ -48,6 +48,8 @@ class SimulationRuntime:
         monitoring_stations_path: str = "configs/monitoring_stations.json",
         monitoring_camera_layout_path: str = "configs/monitoring_camera_layout.json",
         monitoring_database_path: str = "runtime_data/database/open_pit.db",
+        closed_loop_enabled: bool = False,
+        closed_loop_config_path: str = "configs/closed_loop_v1.json",
     ):
         self.scenario = scenario
         self.fleet_config = fleet_config
@@ -111,6 +113,13 @@ class SimulationRuntime:
         self.monitoring = None
         self._monitoring_failure_reported = False
 
+        # Closed Loop is opt-in. Existing S01/S02/S07 behavior is unchanged
+        # unless --closed-loop is supplied.
+        self.closed_loop_enabled = bool(closed_loop_enabled)
+        self.closed_loop_config_path = str(closed_loop_config_path)
+        self.closed_loop = None
+        self._spawn_points_cache = None
+
     def _vehicle_id(self, spec: Dict[str, Any]) -> str:
         return str(spec["vehicle_id"])
 
@@ -152,8 +161,20 @@ class SimulationRuntime:
             road_open=self.route_open,
         )
 
+        if self.closed_loop_enabled:
+            self.contexts[vehicle_id].yield_required = True
+            self.contexts[vehicle_id].yield_reason = (
+                "closed-loop waiting assignment"
+            )
+
         self.spawned_ids.append(vehicle_id)
         self.spawn_times[vehicle_id] = elapsed_seconds
+
+        if self.closed_loop is not None:
+            self.closed_loop.on_vehicle_spawned(
+                vehicle_id,
+                elapsed_seconds,
+            )
 
         print(
             "[RUNTIME] spawned {} | spawn={} | destination={} | "
@@ -194,7 +215,7 @@ class SimulationRuntime:
             self.map_config["rear_release_spawn_index"]
         )
 
-        spawn_points = self.adapter.world.get_map().get_spawn_points()
+        spawn_points = self._get_spawn_points()
         rear_location = spawn_points[reusable_spawn_index].location
 
         previous_snapshot = self.adapter.get_vehicle_snapshot(previous_id)
@@ -240,6 +261,176 @@ class SimulationRuntime:
 
         self._next_spawn_retry_at = 0.0
         self._next_spawn_index += 1
+
+    def _get_spawn_points(self):
+        if self._spawn_points_cache is None:
+            self._spawn_points_cache = (
+                self.adapter.world.get_map().get_spawn_points()
+            )
+        return self._spawn_points_cache
+
+    def get_spawned_vehicle_ids(self):
+        return list(self.spawned_ids)
+
+    def get_vehicle_spec(self, vehicle_id: str):
+        for spec in self.vehicles:
+            if self._vehicle_id(spec) == str(vehicle_id):
+                return dict(spec)
+        raise KeyError("Unknown vehicle_id: {}".format(vehicle_id))
+
+    def get_spawn_point_xyz(self, spawn_point_index: int):
+        point = self._get_spawn_points()[int(spawn_point_index)]
+        loc = point.location
+        return (float(loc.x), float(loc.y), float(loc.z))
+
+    def command_vehicle_destination(
+        self,
+        vehicle_id: str,
+        spawn_point_index: int,
+    ) -> None:
+        """Execution boundary used by Closed Loop.
+
+        Decision never sees this method and never calls CARLA.
+        """
+        spec = self.get_vehicle_spec(vehicle_id)
+        speed_kmh = float(spec["cruise_speed_kmh"])
+
+        self.adapter.set_destination_spawn_point(
+            vehicle_id=vehicle_id,
+            spawn_point_index=int(spawn_point_index),
+            target_speed_kmh=speed_kmh,
+        )
+
+        context = self.contexts[vehicle_id]
+        context.cruise_speed_kmh = speed_kmh
+        context.yield_required = False
+        context.yield_reason = None
+
+    def command_vehicle_route(
+        self,
+        vehicle_id: str,
+        route_id: str,
+        from_spawn_point_index: int,
+        to_spawn_point_index: int,
+        expected_distance_m: float,
+        sampling_resolution_m: float,
+        distance_tolerance_ratio: float = 0.08,
+        route_start_tolerance_m: float = 30.0,
+        skip_ahead_waypoints: int = 2,
+    ) -> None:
+        """Execute a Decision-selected route without importing Decision models."""
+
+        spec = self.get_vehicle_spec(vehicle_id)
+        speed_kmh = float(spec["cruise_speed_kmh"])
+
+        self.adapter.set_route_spawn_points(
+            vehicle_id=vehicle_id,
+            route_id=str(route_id),
+            from_spawn_point_index=int(from_spawn_point_index),
+            to_spawn_point_index=int(to_spawn_point_index),
+            target_speed_kmh=speed_kmh,
+            sampling_resolution_m=float(sampling_resolution_m),
+            expected_distance_m=float(expected_distance_m),
+            distance_tolerance_ratio=float(distance_tolerance_ratio),
+            route_start_tolerance_m=float(route_start_tolerance_m),
+            skip_ahead_waypoints=int(skip_ahead_waypoints),
+        )
+
+        context = self.contexts[vehicle_id]
+        context.cruise_speed_kmh = speed_kmh
+        context.yield_required = False
+        context.yield_reason = None
+
+    def is_vehicle_route_complete(self, vehicle_id: str) -> bool:
+        """Return whether the active CARLA route has been consumed."""
+        return bool(self.adapter.is_done(vehicle_id))
+
+    def get_vehicle_route_status(self, vehicle_id: str):
+        """Return Simulation-layer route progress for Closed Loop."""
+        return self.adapter.get_route_status(vehicle_id)
+
+    def recover_stalled_vehicle_route(
+        self,
+        vehicle_id: str,
+        forward_distance_m: float = 18.0,
+        z_offset_m: float = 0.5,
+        clearance_m: float = 12.0,
+        max_extra_forward_m: float = 30.0,
+    ):
+        """Bounded execution-layer recovery for a physically stalled CAT."""
+
+        result = self.adapter.recover_stalled_route(
+            vehicle_id=vehicle_id,
+            forward_distance_m=float(forward_distance_m),
+            z_offset_m=float(z_offset_m),
+            clearance_m=float(clearance_m),
+            max_extra_forward_m=float(max_extra_forward_m),
+        )
+
+        # Recovery is still part of the same assignment/route. Ensure any
+        # previous service hold remains cleared while travelling.
+        context = self.contexts[vehicle_id]
+        context.yield_required = False
+        context.yield_reason = None
+        return result
+
+    def set_vehicle_business_hold(
+        self,
+        vehicle_id: str,
+        hold: bool,
+        reason: str = "",
+    ) -> None:
+        context = self.contexts[vehicle_id]
+        context.yield_required = bool(hold)
+        context.yield_reason = str(reason) if hold else None
+
+    def get_live_vehicle_telemetry(
+        self,
+        vehicle_id: str,
+        timestamp_s: float,
+    ):
+        """Fallback live observation when Monitoring is disabled/unavailable."""
+        from open_pit_competition.monitoring.models import MobileTelemetry
+
+        snapshot = self.adapter.get_vehicle_snapshot(vehicle_id)
+        return MobileTelemetry(
+            timestamp_s=float(timestamp_s),
+            vehicle_id=snapshot.vehicle_id,
+            x=snapshot.x,
+            y=snapshot.y,
+            z=snapshot.z,
+            speed_kmh=float(snapshot.speed_mps) * 3.6,
+            road_id=snapshot.road_id,
+            lane_id=snapshot.lane_id,
+            healthy=snapshot.healthy,
+            available=snapshot.available,
+            business_state=(
+                self.closed_loop.business_states().get(vehicle_id, "IDLE")
+                if self.closed_loop is not None
+                else "IDLE"
+            ),
+            current_task_id=(
+                self.closed_loop.current_task_ids().get(vehicle_id)
+                if self.closed_loop is not None
+                else None
+            ),
+        )
+
+    def _start_closed_loop(self) -> None:
+        if not self.closed_loop_enabled:
+            return
+
+        from open_pit_competition.closed_loop.coordinator import (
+            ClosedLoopConfig,
+            ClosedLoopCoordinator,
+        )
+
+        config = ClosedLoopConfig.from_path(self.closed_loop_config_path)
+        self.closed_loop = ClosedLoopCoordinator(
+            runtime=self,
+            config=config,
+        )
+        self.closed_loop.start(0.0)
 
     def _handle_event(self, event: RuntimeEvent) -> None:
         """Common event entry point.
@@ -346,7 +537,17 @@ class SimulationRuntime:
             return
 
         try:
-            self.monitoring.collect(elapsed_seconds)
+            business_states = None
+            current_task_ids = None
+            if self.closed_loop is not None:
+                business_states = self.closed_loop.business_states()
+                current_task_ids = self.closed_loop.current_task_ids()
+
+            self.monitoring.collect(
+                elapsed_seconds,
+                business_states=business_states,
+                current_task_ids=current_task_ids,
+            )
         except Exception as exc:
             if not self._monitoring_failure_reported:
                 self._monitoring_failure_reported = True
@@ -386,6 +587,7 @@ class SimulationRuntime:
         self.adapter.connect()
         self._spawn_initial_fleet()
         self._start_monitoring()
+        self._start_closed_loop()
 
         self._start_time = time.monotonic()
         last_status_time = -1e9
@@ -407,9 +609,29 @@ class SimulationRuntime:
 
                 for event in self.event_queue.pop_due(elapsed):
                     self._handle_event(event)
+                    if self.closed_loop is not None:
+                        self.closed_loop.handle_runtime_event(
+                            event,
+                            elapsed,
+                        )
+
+                # Monitoring is the preferred feedback source for StateBuilder.
+                # Closed Loop then updates assignments/business states before
+                # VehicleBehavior executes the next low-level control step.
+                self._collect_monitoring(elapsed)
+
+                if self.closed_loop is not None:
+                    snapshot = (
+                        self.monitoring.latest_snapshot
+                        if self.monitoring is not None
+                        else None
+                    )
+                    self.closed_loop.tick(
+                        elapsed,
+                        monitoring_snapshot=snapshot,
+                    )
 
                 self._step_active_vehicles()
-                self._collect_monitoring(elapsed)
 
                 if elapsed - last_status_time >= 5.0:
                     last_status_time = elapsed
@@ -429,6 +651,12 @@ class SimulationRuntime:
                                 self.monitoring.status_line()
                             )
                         )
+                    if self.closed_loop is not None:
+                        print(
+                            "[CLOSED_LOOP] {}".format(
+                                self.closed_loop.status_line()
+                            )
+                        )
 
                 time.sleep(self.control_period_s)
 
@@ -436,6 +664,18 @@ class SimulationRuntime:
             self._cleanup()
 
     def _cleanup(self) -> None:
+        if self.closed_loop is not None:
+            try:
+                elapsed = (
+                    time.monotonic() - self._start_time
+                    if self._start_time is not None
+                    else None
+                )
+                self.closed_loop.close(elapsed)
+            except Exception as exc:
+                print("[CLEANUP WARNING] closed_loop.close:", exc)
+            self.closed_loop = None
+
         # Destroy camera sensors before CARLA vehicle cleanup.  Monitoring
         # owns only its sensor actors; CarlaAdapter still owns only vehicles.
         if self.monitoring is not None:
@@ -494,6 +734,8 @@ def build_runtime(
     monitoring_stations_path: str = "configs/monitoring_stations.json",
     monitoring_camera_layout_path: str = "configs/monitoring_camera_layout.json",
     monitoring_database_path: str = "runtime_data/database/open_pit.db",
+    closed_loop_enabled: bool = False,
+    closed_loop_config_path: str = "configs/closed_loop_v1.json",
 ) -> SimulationRuntime:
     return SimulationRuntime(
         scenario=load_scenario(scenario_path),
@@ -505,6 +747,8 @@ def build_runtime(
         monitoring_stations_path=monitoring_stations_path,
         monitoring_camera_layout_path=monitoring_camera_layout_path,
         monitoring_database_path=monitoring_database_path,
+        closed_loop_enabled=closed_loop_enabled,
+        closed_loop_config_path=closed_loop_config_path,
     )
 
 
@@ -549,6 +793,15 @@ def main() -> int:
         "--monitoring-db",
         default="runtime_data/database/open_pit.db",
     )
+    parser.add_argument(
+        "--closed-loop",
+        action="store_true",
+        help="Enable Closed Loop V1 task assignment and business lifecycle",
+    )
+    parser.add_argument(
+        "--closed-loop-config",
+        default="configs/closed_loop_v1.json",
+    )
 
     args = parser.parse_args()
 
@@ -562,6 +815,8 @@ def main() -> int:
         monitoring_stations_path=args.monitoring_stations,
         monitoring_camera_layout_path=args.monitoring_cameras,
         monitoring_database_path=args.monitoring_db,
+        closed_loop_enabled=args.closed_loop,
+        closed_loop_config_path=args.closed_loop_config,
     )
 
     runtime.run()

@@ -95,6 +95,16 @@ class CarlaAdapter:
         self._carla_api_root = None
         self._carla_egg_path = None
 
+        # Closed Loop V1.1 explicit route-execution cache.
+        self._global_route_planner = None
+        self._global_route_planner_resolution_m = None
+        self._active_route_ids: Dict[str, str] = {}
+        self._active_route_end_xyz: Dict[str, tuple] = {}
+        self._active_route_total_waypoints: Dict[str, int] = {}
+        self._active_route_traces: Dict[str, list] = {}
+        self._active_route_specs: Dict[str, dict] = {}
+        self._last_driving_decisions: Dict[str, DrivingDecision] = {}
+
 
     # ============================================================
     # CARLA connection
@@ -461,6 +471,27 @@ class CarlaAdapter:
                 vehicle_id
             ] = target_speed_kmh
 
+            self._active_route_ids.pop(
+                vehicle_id,
+                None,
+            )
+            self._active_route_end_xyz.pop(
+                vehicle_id,
+                None,
+            )
+            self._active_route_total_waypoints.pop(
+                vehicle_id,
+                None,
+            )
+            self._active_route_traces.pop(
+                vehicle_id,
+                None,
+            )
+            self._active_route_specs.pop(
+                vehicle_id,
+                None,
+            )
+
 
             print(
                 "[CARLA] destination set "
@@ -544,6 +575,587 @@ class CarlaAdapter:
         )
 
 
+    def set_route_spawn_points(
+        self,
+        vehicle_id: str,
+        route_id: str,
+        from_spawn_point_index: int,
+        to_spawn_point_index: int,
+        target_speed_kmh: float,
+        sampling_resolution_m: float = 2.0,
+        expected_distance_m: Optional[float] = None,
+        distance_tolerance_ratio: float = 0.08,
+        route_start_tolerance_m: float = 30.0,
+        skip_ahead_waypoints: int = 2,
+    ) -> None:
+        """Execute one Decision-selected OD route with CARLA GlobalRoutePlanner.
+
+        The matrix stores the selected OD pair and precomputed route distance.
+        This method rebuilds that OD trace with the same sampling resolution,
+        verifies the distance, trims the already-passed prefix nearest the CAT,
+        and injects the trace directly into LocalPlanner.set_global_plan().
+        """
+
+        self._require_connected()
+        actor = self._actor(vehicle_id)
+
+        spawn_points = self.world.get_map().get_spawn_points()
+        from_index = int(from_spawn_point_index)
+        to_index = int(to_spawn_point_index)
+
+        for index, label in ((from_index, "route start"), (to_index, "route end")):
+            if not (0 <= index < len(spawn_points)):
+                raise CarlaAdapterError(
+                    "{} spawn point {} is out of range 0..{}".format(
+                        label, index, len(spawn_points) - 1
+                    )
+                )
+
+        resolution = max(0.5, float(sampling_resolution_m))
+        planner = self._global_route_planner_for(resolution)
+
+        try:
+            route = planner.trace_route(
+                spawn_points[from_index].location,
+                spawn_points[to_index].location,
+            )
+        except Exception as exc:
+            raise CarlaAdapterError(
+                "Failed to trace selected route '{}': {}".format(route_id, exc)
+            ) from exc
+
+        if not route:
+            raise CarlaAdapterError(
+                "Selected route '{}' produced an empty CARLA trace".format(route_id)
+            )
+
+        full_distance_m = self._route_trace_distance(route)
+
+        if expected_distance_m is not None:
+            expected = max(0.0, float(expected_distance_m))
+            tolerance = max(
+                5.0,
+                expected * max(0.0, float(distance_tolerance_ratio)),
+            )
+            error = abs(full_distance_m - expected)
+            if error > tolerance:
+                raise CarlaAdapterError(
+                    "Selected route '{}' no longer matches matrix: "
+                    "matrix={:.1f}m runtime={:.1f}m error={:.1f}m "
+                    "(tolerance={:.1f}m)".format(
+                        route_id, expected, full_distance_m, error, tolerance
+                    )
+                )
+
+        actor_location = actor.get_location()
+        nearest_index = 0
+        nearest_distance = float("inf")
+        for index, item in enumerate(route):
+            location = item[0].transform.location
+            distance = self._location_distance(actor_location, location)
+            if distance < nearest_distance:
+                nearest_distance = distance
+                nearest_index = index
+
+        if nearest_distance > max(1.0, float(route_start_tolerance_m)):
+            raise CarlaAdapterError(
+                "Vehicle '{}' is {:.1f}m away from selected route '{}' "
+                "near its logical start {}. Refusing a forced turn-back.".format(
+                    vehicle_id, nearest_distance, route_id, from_index
+                )
+            )
+
+        start_index = min(
+            len(route) - 1,
+            nearest_index + max(0, int(skip_ahead_waypoints)),
+        )
+        active_route = route[start_index:]
+        if len(active_route) < 2:
+            active_route = route[max(0, len(route) - 2):]
+
+        if vehicle_id in self._agents:
+            self._release_agent(vehicle_id)
+
+        target_speed_kmh = max(0.0, float(target_speed_kmh))
+        try:
+            agent = self._basic_agent_class(actor, target_speed=target_speed_kmh)
+            self._agents[vehicle_id] = agent
+
+            local_planner = self._local_planner_for(agent)
+            if local_planner is None:
+                raise CarlaAdapterError("BasicAgent has no LocalPlanner")
+
+            setter = getattr(local_planner, "set_global_plan", None)
+            if not callable(setter):
+                raise CarlaAdapterError("CARLA LocalPlanner has no set_global_plan()")
+            # CARLA 0.9.10/0.9.11 LocalPlanner APIs differ from newer
+            # versions.  Explicitly clear any stale buffered waypoints before
+            # installing the Decision route, then mark the planner as being
+            # under a global plan so it cannot append random waypoints after
+            # the selected route.
+            waypoint_buffer = getattr(
+                local_planner,
+                "_waypoint_buffer",
+                None,
+            )
+            if waypoint_buffer is not None:
+                clear_buffer = getattr(waypoint_buffer, "clear", None)
+                if callable(clear_buffer):
+                    clear_buffer()
+
+            setter(active_route)
+
+            if hasattr(local_planner, "_stop_waypoint_creation"):
+                try:
+                    local_planner._stop_waypoint_creation = True
+                except Exception:
+                    pass
+
+            if hasattr(local_planner, "_global_plan"):
+                try:
+                    local_planner._global_plan = True
+                except Exception:
+                    pass
+
+            set_speed = getattr(local_planner, "set_speed", None)
+            if callable(set_speed):
+                set_speed(target_speed_kmh)
+
+            self._cruise_speeds_kmh[vehicle_id] = target_speed_kmh
+            self._active_route_ids[vehicle_id] = str(route_id)
+
+            final_location = route[-1][0].transform.location
+            self._active_route_end_xyz[vehicle_id] = (
+                float(final_location.x),
+                float(final_location.y),
+                float(final_location.z),
+            )
+            self._active_route_total_waypoints[vehicle_id] = len(active_route)
+            self._active_route_traces[vehicle_id] = list(route)
+            self._active_route_specs[vehicle_id] = {
+                "route_id": str(route_id),
+                "from_spawn_point_index": from_index,
+                "to_spawn_point_index": to_index,
+                "target_speed_kmh": target_speed_kmh,
+                "sampling_resolution_m": resolution,
+                "expected_distance_m": (
+                    None
+                    if expected_distance_m is None
+                    else float(expected_distance_m)
+                ),
+                "distance_tolerance_ratio": float(distance_tolerance_ratio),
+                "route_start_tolerance_m": float(route_start_tolerance_m),
+                "skip_ahead_waypoints": int(skip_ahead_waypoints),
+            }
+
+            print(
+                "[CARLA] route set {} | {} | {}->{} | "
+                "matrix={:.1f}m runtime={:.1f}m | wp={}/{} | "
+                "start_gap={:.1f}m | cruise={:.1f} km/h".format(
+                    vehicle_id,
+                    route_id,
+                    from_index,
+                    to_index,
+                    float(expected_distance_m) if expected_distance_m is not None else full_distance_m,
+                    full_distance_m,
+                    len(active_route),
+                    len(route),
+                    nearest_distance,
+                    target_speed_kmh,
+                )
+            )
+        except Exception as exc:
+            self._release_agent(vehicle_id)
+            self._active_route_ids.pop(vehicle_id, None)
+            self._active_route_end_xyz.pop(vehicle_id, None)
+            self._active_route_total_waypoints.pop(vehicle_id, None)
+            self._active_route_traces.pop(vehicle_id, None)
+            self._active_route_specs.pop(vehicle_id, None)
+            if isinstance(exc, CarlaAdapterError):
+                raise
+            raise CarlaAdapterError(
+                "Failed to activate selected route '{}' for '{}': {}".format(
+                    route_id, vehicle_id, exc
+                )
+            ) from exc
+
+    def _global_route_planner_for(self, sampling_resolution_m: float):
+        resolution = float(sampling_resolution_m)
+        if (
+            self._global_route_planner is not None
+            and self._global_route_planner_resolution_m is not None
+            and abs(self._global_route_planner_resolution_m - resolution) <= 1e-9
+        ):
+            return self._global_route_planner
+
+        try:
+            from agents.navigation.global_route_planner import GlobalRoutePlanner
+            from agents.navigation.global_route_planner_dao import GlobalRoutePlannerDAO
+
+            dao = GlobalRoutePlannerDAO(self.world.get_map(), resolution)
+            planner = GlobalRoutePlanner(dao)
+            planner.setup()
+        except Exception as exc:
+            raise CarlaAdapterError(
+                "Unable to initialize GlobalRoutePlanner at {:.2f}m: {}".format(
+                    resolution, exc
+                )
+            ) from exc
+
+        self._global_route_planner = planner
+        self._global_route_planner_resolution_m = resolution
+        return planner
+
+    @staticmethod
+    def _location_distance(a, b) -> float:
+        dx = float(a.x) - float(b.x)
+        dy = float(a.y) - float(b.y)
+        dz = float(a.z) - float(b.z)
+        return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    @classmethod
+    def _route_trace_distance(cls, route) -> float:
+        if not route:
+            return 0.0
+        locations = [item[0].transform.location for item in route]
+        return sum(
+            cls._location_distance(locations[index - 1], locations[index])
+            for index in range(1, len(locations))
+        )
+
+
+    @classmethod
+    def _route_forward_index(
+        cls,
+        route,
+        start_index: int,
+        forward_distance_m: float,
+    ) -> int:
+        """Pick a route index at least forward_distance_m ahead."""
+
+        if not route:
+            return 0
+
+        start = max(
+            0,
+            min(
+                int(start_index),
+                len(route) - 1,
+            ),
+        )
+        target_distance = max(
+            0.0,
+            float(forward_distance_m),
+        )
+        if target_distance <= 1e-6:
+            return start
+
+        travelled = 0.0
+        previous = route[start][0].transform.location
+
+        for index in range(start + 1, len(route)):
+            current = route[index][0].transform.location
+            travelled += cls._location_distance(
+                previous,
+                current,
+            )
+            if travelled >= target_distance:
+                return index
+            previous = current
+
+        return len(route) - 1
+
+
+    def _controlled_clearance_at(
+        self,
+        vehicle_id: str,
+        location,
+    ) -> float:
+        """Nearest other controlled CAT center distance."""
+
+        nearest = float("inf")
+
+        for other_id, other_actor in self._actors.items():
+            if other_id == vehicle_id:
+                continue
+
+            try:
+                other_location = other_actor.get_location()
+            except Exception:
+                continue
+
+            nearest = min(
+                nearest,
+                self._location_distance(
+                    location,
+                    other_location,
+                ),
+            )
+
+        return nearest
+
+
+    def recover_stalled_route(
+        self,
+        vehicle_id: str,
+        forward_distance_m: float = 18.0,
+        z_offset_m: float = 0.5,
+        clearance_m: float = 12.0,
+        max_extra_forward_m: float = 30.0,
+    ) -> Dict[str, object]:
+        """Recover a physically stalled CAT on its current selected route.
+
+        Recovery is deliberately bounded:
+        - only works for an already-active explicit Decision route;
+        - finds the CAT's nearest point on that same route;
+        - relocates a short distance forward on that route;
+        - refuses a target occupied by another controlled CAT;
+        - re-installs the exact same Decision OD route afterwards.
+
+        This method does not alter Decision assignments or task state.
+        """
+
+        self._require_connected()
+        actor = self._actor(vehicle_id)
+
+        route = self._active_route_traces.get(vehicle_id)
+        spec = self._active_route_specs.get(vehicle_id)
+
+        if not route or not spec:
+            raise CarlaAdapterError(
+                "Vehicle '{}' has no recoverable explicit route".format(
+                    vehicle_id
+                )
+            )
+
+        current_location = actor.get_location()
+        nearest_index = 0
+        nearest_gap_m = float("inf")
+
+        for index, item in enumerate(route):
+            location = item[0].transform.location
+            gap = self._location_distance(
+                current_location,
+                location,
+            )
+            if gap < nearest_gap_m:
+                nearest_gap_m = gap
+                nearest_index = index
+
+        requested_forward_m = max(
+            4.0,
+            float(forward_distance_m),
+        )
+        target_index = self._route_forward_index(
+            route,
+            nearest_index,
+            requested_forward_m,
+        )
+
+        # If another controlled CAT occupies the first recovery target,
+        # move a little farther forward, but only inside a strict bound.
+        extra_limit_m = max(
+            0.0,
+            float(max_extra_forward_m),
+        )
+        extra_used_m = 0.0
+
+        while True:
+            target_waypoint = route[target_index][0]
+            target_location = target_waypoint.transform.location
+            clearance = self._controlled_clearance_at(
+                vehicle_id,
+                target_location,
+            )
+
+            if clearance >= max(0.0, float(clearance_m)):
+                break
+
+            if target_index >= len(route) - 1:
+                raise CarlaAdapterError(
+                    "No clear forward recovery point for '{}'".format(
+                        vehicle_id
+                    )
+                )
+
+            next_index = min(
+                len(route) - 1,
+                target_index + 2,
+            )
+            step_distance = self._location_distance(
+                route[target_index][0].transform.location,
+                route[next_index][0].transform.location,
+            )
+            extra_used_m += step_distance
+
+            if extra_used_m > extra_limit_m:
+                raise CarlaAdapterError(
+                    "Recovery target for '{}' remains occupied inside "
+                    "{:.1f}m extra-forward bound".format(
+                        vehicle_id,
+                        extra_limit_m,
+                    )
+                )
+
+            target_index = next_index
+
+        target_transform = route[target_index][0].transform
+
+        # Build a fresh Transform instead of mutating the map waypoint's
+        # shared transform object.
+        relocation = self.carla.Transform(
+            self.carla.Location(
+                x=float(target_transform.location.x),
+                y=float(target_transform.location.y),
+                z=float(target_transform.location.z) + float(z_offset_m),
+            ),
+            self.carla.Rotation(
+                pitch=float(target_transform.rotation.pitch),
+                yaw=float(target_transform.rotation.yaw),
+                roll=float(target_transform.rotation.roll),
+            ),
+        )
+
+        old_transform = actor.get_transform()
+        old_location = old_transform.location
+        shift_m = self._location_distance(
+            old_location,
+            relocation.location,
+        )
+
+        # Keep local copies because _release_agent() clears active-route caches.
+        route_spec = dict(spec)
+
+        try:
+            self._release_agent(vehicle_id)
+
+            actor.set_transform(relocation)
+
+            # Cancel residual motion before the new LocalPlanner takes over.
+            zero = self.carla.Vector3D(0.0, 0.0, 0.0)
+            set_target_velocity = getattr(
+                actor,
+                "set_target_velocity",
+                None,
+            )
+            if callable(set_target_velocity):
+                set_target_velocity(zero)
+
+            set_target_angular_velocity = getattr(
+                actor,
+                "set_target_angular_velocity",
+                None,
+            )
+            if callable(set_target_angular_velocity):
+                set_target_angular_velocity(zero)
+
+            self.set_route_spawn_points(
+                vehicle_id=vehicle_id,
+                route_id=route_spec["route_id"],
+                from_spawn_point_index=route_spec[
+                    "from_spawn_point_index"
+                ],
+                to_spawn_point_index=route_spec[
+                    "to_spawn_point_index"
+                ],
+                target_speed_kmh=route_spec[
+                    "target_speed_kmh"
+                ],
+                sampling_resolution_m=route_spec[
+                    "sampling_resolution_m"
+                ],
+                expected_distance_m=route_spec[
+                    "expected_distance_m"
+                ],
+                distance_tolerance_ratio=route_spec[
+                    "distance_tolerance_ratio"
+                ],
+                route_start_tolerance_m=max(
+                    30.0,
+                    float(
+                        route_spec[
+                            "route_start_tolerance_m"
+                        ]
+                    ),
+                ),
+                skip_ahead_waypoints=route_spec[
+                    "skip_ahead_waypoints"
+                ],
+            )
+
+        except Exception as exc:
+            # Best-effort rollback: restore the actor pose, then try to restore
+            # the same route. Recovery failure must be explicit, not silent.
+            try:
+                actor.set_transform(old_transform)
+                self.set_route_spawn_points(
+                    vehicle_id=vehicle_id,
+                    route_id=route_spec["route_id"],
+                    from_spawn_point_index=route_spec[
+                        "from_spawn_point_index"
+                    ],
+                    to_spawn_point_index=route_spec[
+                        "to_spawn_point_index"
+                    ],
+                    target_speed_kmh=route_spec[
+                        "target_speed_kmh"
+                    ],
+                    sampling_resolution_m=route_spec[
+                        "sampling_resolution_m"
+                    ],
+                    expected_distance_m=route_spec[
+                        "expected_distance_m"
+                    ],
+                    distance_tolerance_ratio=route_spec[
+                        "distance_tolerance_ratio"
+                    ],
+                    route_start_tolerance_m=max(
+                        30.0,
+                        float(
+                            route_spec[
+                                "route_start_tolerance_m"
+                            ]
+                        ),
+                    ),
+                    skip_ahead_waypoints=route_spec[
+                        "skip_ahead_waypoints"
+                    ],
+                )
+            except Exception:
+                pass
+
+            raise CarlaAdapterError(
+                "Stall recovery failed for '{}': {}".format(
+                    vehicle_id,
+                    exc,
+                )
+            ) from exc
+
+        print(
+            "[CARLA RECOVERY] {} | route={} | nearest_wp={} | "
+            "target_wp={} | shift={:.1f}m | route_gap={:.1f}m | "
+            "clearance={:.1f}m".format(
+                vehicle_id,
+                route_spec["route_id"],
+                nearest_index,
+                target_index,
+                shift_m,
+                nearest_gap_m,
+                clearance,
+            )
+        )
+
+        return {
+            "vehicle_id": vehicle_id,
+            "route_id": route_spec["route_id"],
+            "nearest_route_index": nearest_index,
+            "target_route_index": target_index,
+            "shift_m": float(shift_m),
+            "route_gap_m": float(nearest_gap_m),
+            "clearance_m": float(clearance),
+        }
+
+
     # ============================================================
     # Runtime behavior
     # ============================================================
@@ -583,15 +1195,43 @@ class CarlaAdapter:
 
         nearby = []
 
+        ego_route_id = self._active_route_ids.get(
+            vehicle_id
+        )
+
         for other_id in self._actors:
 
             if other_id == vehicle_id:
                 continue
 
-            nearby.append(
-                self.get_vehicle_snapshot(
-                    other_id
+            other_snapshot = self.get_vehicle_snapshot(
+                other_id
+            )
+
+            other_route_id = self._active_route_ids.get(
+                other_id
+            )
+
+            if (
+                ego_route_id is not None
+                and other_route_id is not None
+                and ego_route_id != other_route_id
+                and not self._same_current_road_lane(
+                    ego,
+                    other_snapshot,
                 )
+            ):
+                # Different Decision routes can pass close to one another on
+                # stacked/parallel mine roads.  VehicleBehavior intentionally
+                # uses generous geometric tolerances on curves, so feeding it
+                # every CAT can create false front-vehicle cycles.  Keep
+                # cross-route CATs only when CARLA currently places both on
+                # the same road/lane. BasicAgent still performs its own
+                # immediate route/lane hazard handling underneath.
+                continue
+
+            nearby.append(
+                other_snapshot
             )
 
 
@@ -645,17 +1285,38 @@ class CarlaAdapter:
 
 
         # --------------------------------------------------------
-        # BasicAgent / LocalPlanner still handle route + steering.
+        # Route + steering are handled ONLY by LocalPlanner.
+        #
+        # Do NOT call BasicAgent.run_step() here. BasicAgent has its own
+        # independent vehicle / traffic-light hazard detector and may apply
+        # an emergency stop after VehicleBehavior has already made the mine
+        # truck safety decision. On the custom open-pit map, different
+        # Decision routes can pass close to each other, so that second hazard
+        # layer can stop trucks that VehicleBehavior correctly considered
+        # unrelated.
+        #
+        # Architecture contract:
+        #   VehicleBehavior = longitudinal safety owner
+        #   LocalPlanner    = route following + steering/PID
+        #   CarlaAdapter    = execution only
         # --------------------------------------------------------
+
+        if planner is None:
+
+            raise CarlaAdapterError(
+                "Vehicle '{}' has no active LocalPlanner".format(
+                    vehicle_id
+                )
+            )
 
         try:
 
-            control = agent.run_step()
+            control = planner.run_step()
 
         except Exception as exc:
 
             raise CarlaAdapterError(
-                "BasicAgent.run_step failed for '{}': {}".format(
+                "LocalPlanner.run_step failed for '{}': {}".format(
                     vehicle_id,
                     exc,
                 )
@@ -696,6 +1357,172 @@ class CarlaAdapter:
             # WAIT_FRONT must be able to transition to RESUME.
             control.hand_brake = False
 
+
+        # --------------------------------------------------------
+        # CAT smooth-control V1.7
+        #
+        # Soften normal LocalPlanner actuator commands for the large CAT.
+        # VehicleBehavior remains the sole safety owner.
+        # brake_override remains immediate and is never smoothed down.
+        # --------------------------------------------------------
+
+        try:
+            previous_control = actor.get_control()
+        except Exception:
+            previous_control = None
+
+        requested_steer = float(
+            getattr(
+                control,
+                "steer",
+                0.0,
+            )
+        )
+
+        previous_steer = (
+            float(
+                getattr(
+                    previous_control,
+                    "steer",
+                    0.0,
+                )
+            )
+            if previous_control is not None
+            else 0.0
+        )
+
+        max_steer_delta = 0.035
+        control.steer = max(
+            -1.0,
+            min(
+                1.0,
+                max(
+                    previous_steer - max_steer_delta,
+                    min(
+                        previous_steer + max_steer_delta,
+                        requested_steer,
+                    ),
+                ),
+            ),
+        )
+
+        if decision.brake_override is None:
+
+            previous_throttle = (
+                float(
+                    getattr(
+                        previous_control,
+                        "throttle",
+                        0.0,
+                    )
+                )
+                if previous_control is not None
+                else 0.0
+            )
+
+            previous_brake = (
+                float(
+                    getattr(
+                        previous_control,
+                        "brake",
+                        0.0,
+                    )
+                )
+                if previous_control is not None
+                else 0.0
+            )
+
+            requested_throttle = max(
+                0.0,
+                min(
+                    1.0,
+                    float(
+                        getattr(
+                            control,
+                            "throttle",
+                            0.0,
+                        )
+                    ),
+                ),
+            )
+
+            requested_brake = max(
+                0.0,
+                min(
+                    1.0,
+                    float(
+                        getattr(
+                            control,
+                            "brake",
+                            0.0,
+                        )
+                    ),
+                ),
+            )
+
+            current_speed_kmh = max(
+                0.0,
+                float(ego.speed_mps) * 3.6,
+            )
+            desired_speed_kmh = max(
+                0.0,
+                float(decision.target_speed_kmh),
+            )
+            overspeed_kmh = current_speed_kmh - desired_speed_kmh
+
+            if overspeed_kmh > 0.8:
+                control.throttle = 0.0
+                control.brake = max(
+                    requested_brake,
+                    min(
+                        0.28,
+                        0.05 + 0.05 * overspeed_kmh,
+                    ),
+                )
+            else:
+                throttle_rise = 0.04
+                throttle_fall = 0.08
+                brake_rise = 0.08
+                brake_fall = 0.10
+
+                control.throttle = max(
+                    0.0,
+                    min(
+                        1.0,
+                        max(
+                            previous_throttle - throttle_fall,
+                            min(
+                                previous_throttle + throttle_rise,
+                                requested_throttle,
+                            ),
+                        ),
+                    ),
+                )
+
+                control.brake = max(
+                    0.0,
+                    min(
+                        1.0,
+                        max(
+                            previous_brake - brake_fall,
+                            min(
+                                previous_brake + brake_rise,
+                                requested_brake,
+                            ),
+                        ),
+                    ),
+                )
+
+                if control.brake > 0.05:
+                    control.throttle = 0.0
+
+            control.hand_brake = False
+
+
+
+        self._last_driving_decisions[
+            vehicle_id
+        ] = decision
 
         try:
 
@@ -1053,6 +1880,118 @@ class CarlaAdapter:
                     exc,
                 )
             ) from exc
+
+
+    @staticmethod
+    def _same_current_road_lane(
+        ego: VehicleSnapshot,
+        other: VehicleSnapshot,
+    ) -> bool:
+        if (
+            ego.road_id is None
+            or ego.lane_id is None
+            or other.road_id is None
+            or other.lane_id is None
+        ):
+            return False
+
+        return (
+            int(ego.road_id) == int(other.road_id)
+            and int(ego.lane_id) == int(other.lane_id)
+        )
+
+    def get_route_status(self, vehicle_id: str) -> Dict[str, object]:
+        """Return progress for the currently active explicit Closed Loop route."""
+
+        self._require_connected()
+        actor = self._actor(vehicle_id)
+        agent = self._agents.get(vehicle_id)
+
+        route_id = self._active_route_ids.get(vehicle_id)
+        end_xyz = self._active_route_end_xyz.get(vehicle_id)
+
+        remaining_waypoints = None
+        if agent is not None:
+            planner = self._local_planner_for(agent)
+            if planner is not None:
+                getter = getattr(planner, "get_plan", None)
+                if callable(getter):
+                    try:
+                        remaining_waypoints = len(getter())
+                    except Exception:
+                        remaining_waypoints = None
+
+                # CARLA 0.9.10/0.9.11 LocalPlanner may not expose
+                # get_plan().  Those versions keep a waypoint queue plus a
+                # small active buffer.  Read both without mutating them.
+                if remaining_waypoints is None:
+                    queue = getattr(
+                        planner,
+                        "_waypoints_queue",
+                        None,
+                    )
+                    if queue is None:
+                        queue = getattr(
+                            planner,
+                            "waypoints_queue",
+                            None,
+                        )
+
+                    buffer_ = getattr(
+                        planner,
+                        "_waypoint_buffer",
+                        None,
+                    )
+
+                    queue_len = (
+                        len(queue)
+                        if queue is not None
+                        else 0
+                    )
+                    buffer_len = (
+                        len(buffer_)
+                        if buffer_ is not None
+                        else 0
+                    )
+
+                    if queue is not None or buffer_ is not None:
+                        remaining_waypoints = queue_len + buffer_len
+
+        final_gap_m = None
+        if end_xyz is not None:
+            location = actor.get_location()
+            dx = float(location.x) - float(end_xyz[0])
+            dy = float(location.y) - float(end_xyz[1])
+            dz = float(location.z) - float(end_xyz[2])
+            final_gap_m = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+        last_decision = self._last_driving_decisions.get(
+            vehicle_id
+        )
+
+        behavior_state = None
+        behavior_reason = None
+        if last_decision is not None:
+            state = getattr(last_decision, "state", None)
+            behavior_state = getattr(state, "value", None)
+            if behavior_state is None and state is not None:
+                behavior_state = str(state)
+            behavior_reason = getattr(
+                last_decision,
+                "reason",
+                None,
+            )
+
+        return {
+            "active": route_id is not None,
+            "route_id": route_id,
+            "done": self.is_done(vehicle_id),
+            "remaining_waypoints": remaining_waypoints,
+            "total_waypoints": self._active_route_total_waypoints.get(vehicle_id),
+            "final_gap_m": final_gap_m,
+            "behavior_state": behavior_state,
+            "behavior_reason": behavior_reason,
+        }
 
 
     # ============================================================
@@ -1798,6 +2737,31 @@ class CarlaAdapter:
 
 
         self._agents.pop(
+            vehicle_id,
+            None,
+        )
+
+        self._active_route_ids.pop(
+            vehicle_id,
+            None,
+        )
+        self._active_route_end_xyz.pop(
+            vehicle_id,
+            None,
+        )
+        self._active_route_total_waypoints.pop(
+            vehicle_id,
+            None,
+        )
+        self._active_route_traces.pop(
+            vehicle_id,
+            None,
+        )
+        self._active_route_specs.pop(
+            vehicle_id,
+            None,
+        )
+        self._last_driving_decisions.pop(
             vehicle_id,
             None,
         )
