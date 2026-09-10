@@ -31,10 +31,17 @@ fi
 
 api_started=0
 api_pid=""
+bridge_started=0
+bridge_pid=""
 api_port=""
 api_url=""
 
 cleanup() {
+  if [[ "${bridge_started}" == "1" && -n "${bridge_pid}" ]]; then
+    kill -INT "${bridge_pid}" 2>/dev/null || true
+    wait "${bridge_pid}" 2>/dev/null || true
+  fi
+
   if [[ "${api_started}" == "1" && -n "${api_pid}" ]]; then
     kill "${api_pid}" 2>/dev/null || true
     wait "${api_pid}" 2>/dev/null || true
@@ -84,13 +91,10 @@ if [[ -n "${OPENPIT_DASHBOARD_API:-}" ]]; then
     exit 1
   fi
 else
-  # Reuse 8765 only if it is already the exact current API.  If an old
-  # dashboard process is still occupying 8765, leave it untouched and start
-  # the current API on a clean alternate port.
   if check_api_version "http://127.0.0.1:8765"; then
     api_port="8765"
     api_url="http://127.0.0.1:8765"
-    echo "[OpenPit Desktop] 复用当前 V1.4 API :8765"
+    echo "[OpenPit Desktop] 复用当前 Dashboard API :8765"
   else
     for candidate in 8765 8766 8767 8768 8769; do
       if ! port_is_busy "${candidate}"; then
@@ -108,7 +112,7 @@ else
     mkdir -p "${project_dir}/runtime_data/logs"
     api_log="${project_dir}/runtime_data/logs/dashboard_api_v14_${api_port}.log"
 
-    echo "[OpenPit Desktop] 启动 V1.4 Dashboard API :${api_port} ..."
+    echo "[OpenPit Desktop] 启动 Dashboard API :${api_port} ..."
     (
       cd "${project_dir}"
       export PYTHONPATH="${project_dir}/src${PYTHONPATH:+:${PYTHONPATH}}"
@@ -129,15 +133,34 @@ else
     done
 
     if [[ "${ready}" != "1" ]]; then
-      echo "ERROR: V1.4 Dashboard API 启动失败。" >&2
+      echo "ERROR: Dashboard API 启动失败。" >&2
       echo "日志: ${api_log}" >&2
       exit 1
     fi
   fi
 fi
 
+# Camera Bridge runs in openpit-agent / Python 3.7 so CARLA 0.9.10 ABI stays
+# isolated from the PyQt UI environment.
+mkdir -p "${project_dir}/runtime_data/logs"
+bridge_log="${project_dir}/runtime_data/logs/dashboard_camera_bridge.log"
+
+echo "[OpenPit Desktop] 启动 CAT Camera Bridge ..."
+(
+  cd "${project_dir}"
+  export PYTHONPATH="${project_dir}/src${PYTHONPATH:+:${PYTHONPATH}}"
+  exec "${agent_python}" scripts/camera_bridge.py
+) >"${bridge_log}" 2>&1 &
+bridge_pid=$!
+bridge_started=1
+
 echo "[OpenPit Desktop] API: ${api_url}"
+echo "[OpenPit Desktop] Camera Bridge log: ${bridge_log}"
 echo "[OpenPit Desktop] UI Python: ${ui_python}"
+
 cd "${project_dir}/open_pit_dispatch_app"
 export OPENPIT_DASHBOARD_API="${api_url}"
-exec "${ui_python}" main.py
+
+# Do not exec here: the shell must stay alive so the EXIT trap can stop the
+# bridge/API processes when the desktop window closes.
+"${ui_python}" main.py

@@ -1,0 +1,27 @@
+{
+  "vehicle_ids": [
+    "truck_1",
+    "truck_2",
+    "truck_3",
+    "truck_4",
+    "truck_5",
+    "truck_6"
+  ],
+  "image_width": 640,
+  "image_height": 360,
+  "fov": 90.0,
+  "fps": 4.0,
+  "scan_interval_s": 0.5,
+  "reconnect_interval_s": 2.0,
+  "stale_after_s": 3.0,
+  "vehicle_camera": {
+    "mode": "legacy_adaptive_chase",
+    "min_follow_distance_m": 20.0,
+    "extra_follow_distance_m": 8.0,
+    "min_height_m": 10.0,
+    "extra_height_m": 7.0,
+    "pitch": -16.0,
+    "yaw": 0.0,
+    "roll": 0.0
+  }
+}
