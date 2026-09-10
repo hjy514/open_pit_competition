@@ -226,3 +226,6 @@ runtime_data/archive/
 __pycache__/
 *.pyc
 .pytest_cache/
+runtime_data/generated_scenarios/
+runtime_data/generated_closed_loop/
+runtime_data/results/*.json
