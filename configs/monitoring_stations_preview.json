@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0-monitoring-stations-preview",
+  "map_id": "0325_5",
+  "source_candidates": "configs/monitoring_station_candidates.json",
+  "stations": [
+    {
+      "station_id": "station_road_01",
+      "station_type": "road_monitor",
+      "road_id": 18,
+      "lane_id": 2,
+      "route_coverage_count": 78,
+      "route_coverage_ratio": 0.541667,
+      "haul_route_coverage_count": 45,
+      "empty_route_coverage_count": 33,
+      "monitor_radius_m": 80.0,
+      "camera_enabled": true,
+      "placement_status": "CARLA_WAYPOINT_PREVIEWED",
+      "x": -387.327,
+      "y": -371.224,
+      "z": 147.826,
+      "road_yaw_deg": 324.932,
+      "matched_waypoint_count": 20
+    },
+    {
+      "station_id": "station_road_02",
+      "station_type": "road_monitor",
+      "road_id": 82,
+      "lane_id": 1,
+      "route_coverage_count": 76,
+      "route_coverage_ratio": 0.527778,
+      "haul_route_coverage_count": 45,
+      "empty_route_coverage_count": 31,
+      "monitor_radius_m": 80.0,
+      "camera_enabled": true,
+      "placement_status": "CARLA_WAYPOINT_PREVIEWED",
+      "x": -304.712,
+      "y": -390.286,
+      "z": 145.107,
+      "road_yaw_deg": 10.49,
+      "matched_waypoint_count": 72
+    },
+    {
+      "station_id": "station_road_03",
+      "station_type": "road_monitor",
+      "road_id": 50,
+      "lane_id": 1,
+      "route_coverage_count": 92,
+      "route_coverage_ratio": 0.638889,
+      "haul_route_coverage_count": 37,
+      "empty_route_coverage_count": 55,
+      "monitor_radius_m": 80.0,
+      "camera_enabled": true,
+      "placement_status": "CARLA_WAYPOINT_PREVIEWED",
+      "x": -639.708,
+      "y": -30.2,
+      "z": 175.272,
+      "road_yaw_deg": 287.136,
+      "matched_waypoint_count": 4
+    }
+  ]
+}

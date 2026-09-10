@@ -127,15 +127,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--carla-root",
-        default="/home/xiaoa/carla",
-        help="CARLA source/package root",
+        default="/home/xiaoa/carla/Dist/CARLA_Shipping_0.9.10-dirty/LinuxNoEditor",
+        help="CARLA packaged root",
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=2000)
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument(
         "--operating-areas",
-        default="~/矿山调度/open_pit_agent_demo/configs/map_resource_operating_areas_v1.json",
+        default="configs/operating_areas.json",
     )
     parser.add_argument(
         "--output",

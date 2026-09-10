@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Runtime generated data
+runtime_data/database/*.db
+runtime_data/monitoring/
+runtime_data/archive/
+
+# Python/test cache
+__pycache__/
+*.pyc
+.pytest_cache/

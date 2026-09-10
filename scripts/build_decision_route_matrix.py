@@ -139,7 +139,7 @@ def main():
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument(
         "--operating-areas",
-        default="~/矿山调度/open_pit_agent_demo/configs/map_resource_operating_areas_v1.json",
+        default="configs/operating_areas.json",
     )
     parser.add_argument(
         "--output",

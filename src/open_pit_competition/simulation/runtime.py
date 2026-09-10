@@ -43,6 +43,11 @@ class SimulationRuntime:
         fleet_config: Dict[str, Any],
         map_config: Dict[str, Any],
         system_config: Dict[str, Any],
+        monitoring_enabled: bool = False,
+        monitoring_camera_enabled: bool = True,
+        monitoring_stations_path: str = "configs/monitoring_stations.json",
+        monitoring_camera_layout_path: str = "configs/monitoring_camera_layout.json",
+        monitoring_database_path: str = "runtime_data/database/open_pit.db",
     ):
         self.scenario = scenario
         self.fleet_config = fleet_config
@@ -95,6 +100,16 @@ class SimulationRuntime:
         # S07 toggles this state. VehicleBehavior only consumes road_open;
         # it does not own scenario/event logic.
         self.route_open = True
+
+        # Monitoring is observation-only and optional.  It is deliberately
+        # fail-open: a sensor/database failure must never stop CAT control.
+        self.monitoring_enabled = bool(monitoring_enabled)
+        self.monitoring_camera_enabled = bool(monitoring_camera_enabled)
+        self.monitoring_stations_path = str(monitoring_stations_path)
+        self.monitoring_camera_layout_path = str(monitoring_camera_layout_path)
+        self.monitoring_database_path = str(monitoring_database_path)
+        self.monitoring = None
+        self._monitoring_failure_reported = False
 
     def _vehicle_id(self, spec: Dict[str, Any]) -> str:
         return str(spec["vehicle_id"])
@@ -291,6 +306,60 @@ class SimulationRuntime:
                 context=self.contexts[vehicle_id],
             )
 
+    def _start_monitoring(self) -> None:
+        if not self.monitoring_enabled:
+            return
+
+        manager = None
+        try:
+            # Lazy import keeps the Simulation layer independent when
+            # monitoring is disabled.
+            from open_pit_competition.monitoring.manager import MonitoringManager
+
+            manager = MonitoringManager(
+                adapter=self.adapter,
+                stations_path=self.monitoring_stations_path,
+                camera_layout_path=self.monitoring_camera_layout_path,
+                database_path=self.monitoring_database_path,
+                camera_enabled=self.monitoring_camera_enabled,
+                telemetry_interval_s=0.5,
+                station_interval_s=1.0,
+            )
+            manager.start()
+            self.monitoring = manager
+        except Exception as exc:
+            # Observation must never be a hard dependency of vehicle motion.
+            print(
+                "[MONITORING WARNING] startup failed; vehicle runtime continues: {}".format(
+                    exc
+                )
+            )
+            if manager is not None:
+                try:
+                    manager.close()
+                except Exception:
+                    pass
+            self.monitoring = None
+
+    def _collect_monitoring(self, elapsed_seconds: float) -> None:
+        if self.monitoring is None:
+            return
+
+        try:
+            self.monitoring.collect(elapsed_seconds)
+        except Exception as exc:
+            if not self._monitoring_failure_reported:
+                self._monitoring_failure_reported = True
+                print(
+                    "[MONITORING WARNING] collection failed; monitoring disabled "
+                    "for this run, vehicle control continues: {}".format(exc)
+                )
+            try:
+                self.monitoring.close()
+            except Exception:
+                pass
+            self.monitoring = None
+
     def run(self) -> None:
         print("=" * 78)
         print(
@@ -316,6 +385,7 @@ class SimulationRuntime:
 
         self.adapter.connect()
         self._spawn_initial_fleet()
+        self._start_monitoring()
 
         self._start_time = time.monotonic()
         last_status_time = -1e9
@@ -339,6 +409,7 @@ class SimulationRuntime:
                     self._handle_event(event)
 
                 self._step_active_vehicles()
+                self._collect_monitoring(elapsed)
 
                 if elapsed - last_status_time >= 5.0:
                     last_status_time = elapsed
@@ -352,6 +423,12 @@ class SimulationRuntime:
                             ",".join(self.spawned_ids),
                         )
                     )
+                    if self.monitoring is not None:
+                        print(
+                            "[MONITORING] {}".format(
+                                self.monitoring.status_line()
+                            )
+                        )
 
                 time.sleep(self.control_period_s)
 
@@ -359,6 +436,15 @@ class SimulationRuntime:
             self._cleanup()
 
     def _cleanup(self) -> None:
+        # Destroy camera sensors before CARLA vehicle cleanup.  Monitoring
+        # owns only its sensor actors; CarlaAdapter still owns only vehicles.
+        if self.monitoring is not None:
+            try:
+                self.monitoring.close()
+            except Exception as exc:
+                print("[CLEANUP WARNING] monitoring.close:", exc)
+            self.monitoring = None
+
         try:
             self.adapter.close()
         except Exception as exc:
@@ -403,12 +489,22 @@ def build_runtime(
     fleet_path: str,
     map_path: str,
     system_path: str,
+    monitoring_enabled: bool = False,
+    monitoring_camera_enabled: bool = True,
+    monitoring_stations_path: str = "configs/monitoring_stations.json",
+    monitoring_camera_layout_path: str = "configs/monitoring_camera_layout.json",
+    monitoring_database_path: str = "runtime_data/database/open_pit.db",
 ) -> SimulationRuntime:
     return SimulationRuntime(
         scenario=load_scenario(scenario_path),
         fleet_config=_load_json(fleet_path),
         map_config=_load_json(map_path),
         system_config=_load_json(system_path),
+        monitoring_enabled=monitoring_enabled,
+        monitoring_camera_enabled=monitoring_camera_enabled,
+        monitoring_stations_path=monitoring_stations_path,
+        monitoring_camera_layout_path=monitoring_camera_layout_path,
+        monitoring_database_path=monitoring_database_path,
     )
 
 
@@ -431,6 +527,28 @@ def main() -> int:
         "--system",
         default="configs/system.json",
     )
+    parser.add_argument(
+        "--monitoring",
+        action="store_true",
+        help="Enable observation-only fixed-station and CAT telemetry monitoring",
+    )
+    parser.add_argument(
+        "--monitoring-no-cameras",
+        action="store_true",
+        help="Collect monitoring data without spawning RGB sensor actors",
+    )
+    parser.add_argument(
+        "--monitoring-stations",
+        default="configs/monitoring_stations.json",
+    )
+    parser.add_argument(
+        "--monitoring-cameras",
+        default="configs/monitoring_camera_layout.json",
+    )
+    parser.add_argument(
+        "--monitoring-db",
+        default="runtime_data/database/open_pit.db",
+    )
 
     args = parser.parse_args()
 
@@ -439,6 +557,11 @@ def main() -> int:
         fleet_path=args.fleet,
         map_path=args.map_config,
         system_path=args.system,
+        monitoring_enabled=args.monitoring,
+        monitoring_camera_enabled=(not args.monitoring_no_cameras),
+        monitoring_stations_path=args.monitoring_stations,
+        monitoring_camera_layout_path=args.monitoring_cameras,
+        monitoring_database_path=args.monitoring_db,
     )
 
     runtime.run()

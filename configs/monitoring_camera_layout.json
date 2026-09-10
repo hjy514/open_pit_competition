@@ -1,0 +1,108 @@
+{
+  "schema_version": "1.1-monitoring-camera-layout",
+  "map_id": "0325_5",
+  "source": "Monitoring V1A.3 visibility preview",
+  "design_rule": "observation_only_no_vehicle_interference",
+  "stations": [
+    {
+      "station_id": "station_road_01",
+      "monitored_road_id": 18,
+      "monitored_lane_id": 2,
+      "placement": "overhead",
+      "road_anchor": {
+        "x": -387.327,
+        "y": -371.224,
+        "z": 147.826,
+        "road_yaw_deg": 324.932
+      },
+      "camera_transform": {
+        "x": -387.327,
+        "y": -371.224,
+        "z": 157.826,
+        "pitch": -26.565,
+        "yaw": -35.068,
+        "roll": 0.0
+      },
+      "camera_policy": {
+        "sensor_blueprint": "sensor.camera.rgb",
+        "physical_obstacle": false,
+        "collision_actor_spawned": false,
+        "image_width": 640,
+        "image_height": 360,
+        "target_fps": 5,
+        "fov_deg": 100.0
+      },
+      "visibility_review": {
+        "status": "APPROVED_FROM_V1A3_PREVIEW",
+        "reason": "side views are constrained by nearby terrain/berm; overhead gives the cleanest road observation without roadside placement risk"
+      }
+    },
+    {
+      "station_id": "station_road_02",
+      "monitored_road_id": 50,
+      "monitored_lane_id": 1,
+      "placement": "right",
+      "road_anchor": {
+        "x": -639.708,
+        "y": -30.2,
+        "z": 175.272,
+        "road_yaw_deg": 287.136
+      },
+      "camera_transform": {
+        "x": -647.353,
+        "y": -32.557,
+        "z": 181.772,
+        "pitch": -15.601,
+        "yaw": -48.902,
+        "roll": 0.0
+      },
+      "camera_policy": {
+        "sensor_blueprint": "sensor.camera.rgb",
+        "physical_obstacle": false,
+        "collision_actor_spawned": false,
+        "image_width": 640,
+        "image_height": 360,
+        "target_fps": 5,
+        "fov_deg": 90.0
+      },
+      "visibility_review": {
+        "status": "APPROVED_FROM_V1A3_PREVIEW",
+        "reason": "right-side view provides a broad, clear road segment with less immediate roadside occlusion"
+      }
+    },
+    {
+      "station_id": "station_road_03",
+      "monitored_road_id": 4,
+      "monitored_lane_id": 1,
+      "placement": "overhead",
+      "road_anchor": {
+        "x": -427.29,
+        "y": 188.627,
+        "z": 9.325,
+        "road_yaw_deg": 77.096
+      },
+      "camera_transform": {
+        "x": -427.29,
+        "y": 188.627,
+        "z": 19.325,
+        "pitch": -26.565,
+        "yaw": 77.096,
+        "roll": 0.0
+      },
+      "camera_policy": {
+        "sensor_blueprint": "sensor.camera.rgb",
+        "physical_obstacle": false,
+        "collision_actor_spawned": false,
+        "image_width": 640,
+        "image_height": 360,
+        "target_fps": 5,
+        "fov_deg": 100.0
+      },
+      "visibility_review": {
+        "status": "APPROVED_FROM_V1A3_PREVIEW",
+        "reason": "side views are constrained by terrain/wall geometry; overhead gives the most stable road coverage"
+      }
+    }
+  ],
+  "v1b1_note": "Overhead cameras use 100-degree FOV for broader traffic-state observation; sensor-only placement remains non-colliding."
+}
